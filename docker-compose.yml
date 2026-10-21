@@ -1,0 +1,87 @@
+# =============================================================================
+# Hệ thống Quản lý Văn phòng - Docker Compose
+# -----------------------------------------------------------------------------
+# Cổng publish ra máy host được chọn KHÁC với các dự án trước
+# (3000, 5432, 6379, 8000, 80...) để chạy song song không xung đột:
+#   Frontend  : http://localhost:18080   (biến FRONTEND_PORT)
+#   Backend   : http://localhost:18000   (biến BACKEND_PORT)  -> /docs
+#   PostgreSQL: localhost:15432          (biến DB_PORT)
+# Có thể đổi trong file .env.
+# =============================================================================
+name: office-manager
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: office_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-office_db}
+      POSTGRES_USER: ${POSTGRES_USER:-office_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-office_password}
+      TZ: ${TIMEZONE:-Asia/Ho_Chi_Minh}
+    ports:
+      - "${DB_PORT:-15432}:5432"
+    volumes:
+      - office_pgdata:/var/lib/postgresql/data
+      # Các file .sql trong thư mục này tự chạy ở lần khởi tạo volume đầu tiên
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-office_user} -d ${POSTGRES_DB:-office_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - office_net
+
+  backend:
+    build:
+      context: ./backend
+    container_name: office_backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Dùng tên service "db" và cổng nội bộ 5432 trong mạng compose
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-office_user}:${POSTGRES_PASSWORD:-office_password}@db:5432/${POSTGRES_DB:-office_db}
+      SECRET_KEY: ${SECRET_KEY:-doi-khoa-bi-mat-nay-trong-file-env}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-720}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:18080}
+      TIMEZONE: ${TIMEZONE:-Asia/Ho_Chi_Minh}
+      WORK_START: ${WORK_START:-08:30}
+      WORK_END: ${WORK_END:-17:30}
+      SEED_DEMO_DATA: ${SEED_DEMO_DATA:-true}
+      SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-admin@congty.vn}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-Admin@123}
+    ports:
+      - "${BACKEND_PORT:-18000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - office_net
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: office_frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${FRONTEND_PORT:-18080}:80"
+    networks:
+      - office_net
+
+volumes:
+  office_pgdata:
+    name: office_manager_pgdata
+
+networks:
+  office_net:
+    name: office_manager_net
